@@ -238,6 +238,7 @@ def total_animals_left(animals, hp_lost):
     return sum(round(c * hp_lost) for c in animals)
 
 def adapt_unit_counts(unit_counts, distance, speed):
+    # find the highest animal type present
     last = next((i for i in range(9, -1, -1) if unit_counts[i] != 0), 0)
     spawn_rate = spawn_rates[last]
     if distance < 20:
@@ -245,6 +246,14 @@ def adapt_unit_counts(unit_counts, distance, speed):
     else:
         runtime = (20 / speed) + ((distance - 20) / (speed * 4.2))
     units_spawned = round(int(runtime * 60) / spawn_rate)
+
+    # cap: if multiple animal types present, highest type can't exceed count of second-highest
+    nonzero_counts = sorted([c for c in unit_counts if c > 0])
+    if len(nonzero_counts) >= 2:
+        second_highest = nonzero_counts[-2]
+        max_spawn = max(0, second_highest - unit_counts[last])
+        units_spawned = min(units_spawned, max_spawn)
+
     unit_counts[last] += units_spawned
     return unit_counts
 
