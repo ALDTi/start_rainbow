@@ -1,3 +1,91 @@
+
+Claude finished the response
+Yeah, Streamlit is HTML-rendering the URLs and mangling the quotes. The fix is to store the URLs in a st.session_state list and use st.components.v1.html instead of st.markdown to inject the JS cleanly:
+
+Shared a file, ran 2 commands
+The root cause was st.markdown with unsafe_allow_html=True passes the string through Streamlit's HTML renderer which re-encodes the quotes inside the onclick. components.html bypasses that entirely and writes the HTML verbatim into an iframe, so json.dumps handles the escaping cleanly and the JS sees a proper array.
+
+
+Farm slots
+PY 
+Pasted text.txt
+Pasted text.txt
+TXT
+Hi, it's time for a big update! I am now no longer a 'ghaul' player but a 'Teuton' player, which means i want to have a selection menu at the top to swap between the two. This also means the teams and unit costs, and speed change!  As inspiration I have a script that previously calculated the optimal farmteams with teutons. I'm g uessing it has the data you need. Please let me know if you need any additional context or info.
+
+Good timing for an upgrade! Looking at the Teuton script, here's what I need to pull in vs what changes:
+
+From the Teuton script:
+
+Two troop types: Clubs (inf, atk=40, cost=250) + TK (cav, atk=150, cost=1525)
+get_calculation_result uses both inf and cav attack, weighted by ratio — proper two-troop formula
+get_best_team does a 2D grid search (clubs × TK) instead of 1D
+Speed changes too (TK speed vs TT speed)
+What I need from you:
+
+What's the TK speed and Club speed in fields/hour?
+For the farm slot cycling logic (TT needed / Hae needed columns), what replaces TT and Hae for Teutons? Is it Clubs + TK, or just TK?
+In the Gaul script, troop_sum=1 meant TT-only and troop_sum=2 meant TT+Hae. What does troop_sum mean in a Teuton farmlist — is it still 1 or 2 troops per slot, and which troops?
+Once you confirm those I'll build the selector and wire both modes cleanly.
+
+the speed is dominated by the clubs who run the slowest at 7 fields per hour
+Every team is now 1 club + 1 TK, there is no more difference in teams.
+
+Perfect, that simplifies things nicely. So:
+
+One team type: always 1 Club + 1 TK
+Speed: 7 fields/hour (clubs)
+troop_sum distinction is gone — every slot uses the same team composition
+Let me now build the updated script:
+
+Created a file, shared a file, and 5 more steps
+Here's what changed in farm_slots.py:
+
+Tribe selector — new dropdown at the top of Settings. Switching tribes updates the default hero speed automatically (19 for Gaul, 7 for Teuton).
+
+Two separate combat engines:
+
+Gaul: unchanged TT engine (cav_def only, single troop t4)
+Teuton: Club + TK engine using both inf_def and cav_def weighted by the attack split (40/190 = ~21% inf / ~79% cav). Every team is exactly 1 Club + 1 TK, so it's a simple 1D search over n_teams.
+Teuton attack URL uses troop%5Bt1%5D={n} (Clubswinger) + troop%5Bt5%5D={n} (TK).
+
+Active farm metrics adapt per tribe — Gaul shows TT + Hae needed; Teuton shows Clubs needed / TK needed (always equal).
+
+Table layout for Teuton drops the "Troops" and "Hae needed" columns since every farm is the same team type now. Team column shows 2× Club+TK style.
+
+Open-all button also builds the correct URL format per tribe.
+
+
+Farm slots
+PY 
+I think there is a mistake. For the clears you now assume that 1 club and 1 tk will always run so it's 27x the team. But the clue here is that the ration is not fixed. So you can to 27 clubs an 2 TK's as well, (so more options to calculate). Can you adapt?
+
+You're right — the 1:1 ratio assumption was wrong. The actual search should find the optimal nclub + ntk combination (2D grid), not just scale a fixed pair.
+
+Let me look at the reference Teuton script to get the exact get_best_team logic:
+
+Read
+Good — the reference script does a full 2D meshgrid (max_clubs=500, max_ntk=20), picks the top-10 by profit ratio, then returns the cheapest among those. I need to add the validity rules (≤1 animal left, gain ≥ profit_factor × cost) and wire this properly into farm_slots.py.
+
+Also note: the troop cycling for Teuton needs to use clubs count (not teams) and TK count separately now.
+
+Edited a file, shared a file, ran 3 commands
+Here's what changed:
+
+teuton_get_best_team now does the full 2D grid search — nclub from 1→500, ntk from 1→20 — same approach as your reference script. Validity rules: ≤1 animal left and gain ≥ profit_factor × cost. Among all valid combos it picks the best profit ratio, then cheapest team cost on ties.
+
+The example test confirms it: for 5 boars + 3 wolves the 1:1 assumption would give 27C + 27TK, but the real optimum is 44C + 4TK — much cheaper team cost, same cleanup result.
+
+The team column now shows 44C + 4TK style, and the attack URL sends troop[t1]=44&troop[t5]=4 accordingly. Teuton troop cycling still uses Clubs speed (7 f/hr) since that's the limiting troop.
+
+
+Farm slots
+PY 
+
+
+
+Claude is AI and can make mistakes.
+Farm slots · PY
 import json
 import re
 import math
@@ -6,14 +94,14 @@ import requests
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-
+ 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Farm Slot Planner", layout="wide")
-
+ 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
-
+ 
     html, body, [class*="css"] {
         font-family: 'Rajdhani', sans-serif;
     }
@@ -27,7 +115,7 @@ st.markdown("""
         letter-spacing: 0.05em;
     }
     .block-container { padding-top: 2rem; }
-
+ 
     /* green button (no animals) */
     .btn-green a {
         background: #0d4429 !important;
@@ -50,7 +138,7 @@ st.markdown("""
         box-shadow: 0 0 8px #3fb95044 !important;
         color: #3fb950 !important;
     }
-
+ 
     /* red button (has animals) */
     .btn-red a {
         background: #3d0f0f !important;
@@ -73,7 +161,7 @@ st.markdown("""
         box-shadow: 0 0 8px #f8514944 !important;
         color: #f85149 !important;
     }
-
+ 
     /* row styling */
     .slot-row {
         display: grid;
@@ -89,7 +177,7 @@ st.markdown("""
     }
     .slot-row:hover { background: #161b22; }
     .slot-row:last-child { border-radius: 0 0 6px 6px; border-bottom: 1px solid #30363d; }
-
+ 
     .coord { color: #e6edf3; font-weight: 600; }
     .dist  { color: #8b949e; }
     .team  { color: #d2a679; }
@@ -107,7 +195,7 @@ st.markdown("""
         width: 100%;
         display: inline-block;
     }
-
+ 
     .tribe-badge {
         display: inline-block;
         padding: 3px 10px;
@@ -119,34 +207,34 @@ st.markdown("""
     }
     .tribe-gaul   { background: #0d4429; color: #3fb950; border: 1px solid #238636; }
     .tribe-teuton { background: #3d2a00; color: #e3a840; border: 1px solid #a67820; }
-
+ 
     .stButton { margin: 0 !important; }
     div[data-testid="stHorizontalBlock"] { gap: 6px !important; align-items: center; }
 </style>
 """, unsafe_allow_html=True)
-
+ 
 # ── constants ──────────────────────────────────────────────────────────────────
-SERVER     = "ts12.x1.europe.travian.com"
-SHEET_ID   = "1-9hAUMfgoehZ_ILgsVDwu2ib1j4LlXd4RwwUhvrMO-Y"
+SERVER     = "ts2.x1.europe.travian.com"
+SHEET_ID   = "1nSNknj19eb_Jm2nKgZo-6bnw9yd1y4MQa9yDXnYML1M"
 SHEET_NAME = "cookie"
-
+ 
 animal_values  = [160, 160, 160, 160, 320, 320, 480, 480, 480, 800]
 spawn_rates    = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 animal_cav_def = [20, 40, 60, 50, 33, 70, 200, 240, 250, 520]
 animal_inf_def = [25, 35, 40, 66, 70, 80, 140, 380, 170, 440]
-
+ 
 # Gaul constants
 TT_ATK  = 100
 TT_COST = 1050
 TT_SPD  = 19
-
+ 
 # Teuton constants
 CLUB_ATK  = 40
 TK_ATK    = 150
 CLUB_COST = 250
 TK_COST   = 1525
 CLUB_SPD  = 7   # clubs are the slowest troop → dictates speed
-
+ 
 # ── Gaul engine ───────────────────────────────────────────────────────────────
 def gaul_hp_lost(animals, ntt):
     attacker_points = TT_ATK * ntt
@@ -156,10 +244,10 @@ def gaul_hp_lost(animals, ntt):
     nature_points = cav_def + 10
     atk_result = 100 * (nature_points / attacker_points) ** 1.5
     return atk_result / (atk_result + 100)
-
+ 
 def gaul_cost(hp_lost, ntt):
     return round(ntt * hp_lost) * TT_COST
-
+ 
 def gaul_get_best_team(animals, max_tt=500, profit_factor=0.8):
     for ntt in range(1, max_tt + 1):
         hp_lost = gaul_hp_lost(animals, ntt)
@@ -168,7 +256,7 @@ def gaul_get_best_team(animals, max_tt=500, profit_factor=0.8):
         if total_animals_left(animals, hp_lost) <= 1 and gain >= profit_factor * cost:
             return ntt
     return None
-
+ 
 def gaul_build_url(x, y, village_id, n):
     node_id = get_nodeid(x, y)
     return (
@@ -177,12 +265,11 @@ def gaul_build_url(x, y, village_id, n):
         f"tt=2&troop%5Bt4%5D={n}&"
         f"targetMapId={node_id}&eventType=4&"
     )
-
+ 
 # ── Teuton engine ─────────────────────────────────────────────────────────────
-def teuton_hp_lost(animals, n_teams):
-    """n_teams = number of Club+TK pairs (1:1 ratio)"""
-    inf_atk = CLUB_ATK * n_teams
-    cav_atk = TK_ATK   * n_teams
+def teuton_hp_lost(animals, nclub, ntk):
+    inf_atk   = CLUB_ATK * nclub
+    cav_atk   = TK_ATK   * ntk
     total_atk = inf_atk + cav_atk
     if total_atk <= 0:
         return 1.0
@@ -191,37 +278,65 @@ def teuton_hp_lost(animals, n_teams):
     nature_points = (inf_def * (inf_atk / total_atk)) + (cav_def * (cav_atk / total_atk)) + 10
     atk_result = 100 * (nature_points / total_atk) ** 1.5
     return atk_result / (atk_result + 100)
-
-def teuton_cost(hp_lost, n_teams):
-    lost = round(n_teams * hp_lost)
-    return lost * (CLUB_COST + TK_COST)
-
-def teuton_get_best_team(animals, max_teams=500, profit_factor=0.8):
-    for n in range(1, max_teams + 1):
-        hp_lost = teuton_hp_lost(animals, n)
-        cost    = teuton_cost(hp_lost, n)
-        gain    = get_res_gained(animals, hp_lost)
-        if total_animals_left(animals, hp_lost) <= 1 and gain >= profit_factor * cost:
-            return n
-    return None
-
-def teuton_build_url(x, y, village_id, n_teams):
+ 
+def teuton_cost(hp_lost, nclub, ntk):
+    return round(ntk * hp_lost) * TK_COST + round(nclub * hp_lost) * CLUB_COST
+ 
+def teuton_get_best_team(animals, max_clubs=500, max_tk=20, profit_factor=0.8):
+    """
+    Full 2-D search over (nclub, ntk).
+    Validity: ≤1 animal left AND gain ≥ profit_factor × cost.
+    Among all valid combos picks the one with best (gain-cost)/team_cost,
+    then among ties picks cheapest team_cost.
+    Returns (nclub, ntk) or None.
+    """
+    nclubs_range = np.arange(1, max_clubs + 1)
+    ntk_range    = np.arange(1, max_tk + 1)
+    X, Y = np.meshgrid(nclubs_range, ntk_range)  # X=clubs, Y=tk
+ 
+    best_ratio    = -np.inf
+    best_teamcost = np.inf
+    best          = None
+ 
+    for i in range(len(ntk_range)):
+        for j in range(len(nclubs_range)):
+            nclub = int(X[i, j])
+            ntk   = int(Y[i, j])
+ 
+            hp_lost   = teuton_hp_lost(animals, nclub, ntk)
+            cost      = teuton_cost(hp_lost, nclub, ntk)
+            gain      = get_res_gained(animals, hp_lost)
+            left      = total_animals_left(animals, hp_lost)
+            team_cost = CLUB_COST * nclub + TK_COST * ntk
+ 
+            if left > 1 or gain < profit_factor * cost:
+                continue
+ 
+            ratio = (gain - cost) / team_cost if team_cost > 0 else -np.inf
+            if ratio > best_ratio or (ratio == best_ratio and team_cost < best_teamcost):
+                best_ratio    = ratio
+                best_teamcost = team_cost
+                best          = (nclub, ntk)
+ 
+    return best  # (nclub, ntk) or None
+ 
+def teuton_build_url(x, y, village_id, nclub, ntk):
     node_id = get_nodeid(x, y)
     # Teuton: t1 = Clubswinger, t5 = TK
     return (
         f"https://{SERVER}/build.php?"
         f"newdid={village_id}&gid=16&"
-        f"tt=2&troop%5Bt1%5D={n_teams}&troop%5Bt5%5D={n_teams}&"
+        f"tt=2&troop%5Bt1%5D={nclub}&troop%5Bt5%5D={ntk}&"
         f"targetMapId={node_id}&eventType=4&"
     )
-
+ 
 # ── shared helpers ────────────────────────────────────────────────────────────
 def get_res_gained(animals, hp_lost):
     return sum(round(c * (1 - hp_lost)) * v for c, v in zip(animals, animal_values))
-
+ 
 def total_animals_left(animals, hp_lost):
     return sum(round(c * hp_lost) for c in animals)
-
+ 
 def adapt_unit_counts(unit_counts, distance, speed):
     last = next((i for i in range(9, -1, -1) if unit_counts[i] != 0), 0)
     spawn_rate = spawn_rates[last]
@@ -232,28 +347,28 @@ def adapt_unit_counts(unit_counts, distance, speed):
     units_spawned = round(int(runtime * 60) / spawn_rate)
     unit_counts[last] += units_spawned
     return unit_counts
-
+ 
 def get_nodeid(x, y):
     return (200 - y) * 401 + (x + 200) + 1
-
+ 
 def build_map_url(x, y):
     return f"https://{SERVER}/karte.php?x={x}&y={y}"
-
+ 
 def troops_needed(dist, speed):
     CYCLE_HR = 6 / 60
     return math.ceil((2 * dist / speed) / CYCLE_HR)
-
+ 
 # ── sheet helpers ─────────────────────────────────────────────────────────────
 def read_cookie_from_sheet(sheet_id, sheet_name):
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
     df  = pd.read_csv(url, header=None)
     return str(df.values[0][0])
-
+ 
 def read_json_from_sheet(sheet_id, sheet_name="JSON"):
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
     df  = pd.read_csv(url, header=None)
     return json.loads(str(df.values[0][0]))
-
+ 
 # ── map request helpers ───────────────────────────────────────────────────────
 def post_request(server, x, y, cookie):
     url     = f"https://{server}/api/v1/map/position"
@@ -272,7 +387,7 @@ def post_request(server, x, y, cookie):
                       timeout=25)
     r.raise_for_status()
     return r.text
-
+ 
 def parse_all_animal_positions(raw_text):
     cleaned      = raw_text.replace("\\", "")
     chunks       = cleaned.split('"position":{')
@@ -293,10 +408,10 @@ def parse_all_animal_positions(raw_text):
             counts[int(uid) - 31] = int(cnt)
         position_map[(x, y)] = counts
     return position_map, seen_coords
-
+ 
 # ── UI ────────────────────────────────────────────────────────────────────────
 st.title("⚔ Farm Slot Planner")
-
+ 
 with st.expander("Settings", expanded=True):
     t_col, c1, c2, c3, c4 = st.columns([1.2, 1, 1, 1, 1.5])
     tribe         = t_col.selectbox("Tribe", ["Gaul", "Teuton"], index=0)
@@ -309,13 +424,13 @@ with st.expander("Settings", expanded=True):
         help="Minimum gain/cost ratio (gain ≥ factor × cost). Lower = more aggressive.",
     )
     sheet_id      = c4.text_input("Sheet ID", value=SHEET_ID)
-
+ 
     badge_cls = "tribe-gaul" if tribe == "Gaul" else "tribe-teuton"
     badge_lbl = "🛡 GAUL — Teutates Thunder" if tribe == "Gaul" else "🪓 TEUTON — Clubswinger + TK"
     st.markdown(f'<span class="tribe-badge {badge_cls}">{badge_lbl}</span>', unsafe_allow_html=True)
-
+ 
 run_btn = st.button("🔍 Analyse slots", use_container_width=True)
-
+ 
 if run_btn:
     with st.spinner("Reading sheet data..."):
         try:
@@ -324,7 +439,7 @@ if run_btn:
         except Exception as e:
             st.error(f"Failed to read Google Sheet: {e}")
             st.stop()
-
+ 
     village_id = raw_data["data"]["farmList"]["ownerVillage"]["id"]
     slots = raw_data["data"]["farmList"]["slots"]
     rows  = []
@@ -337,13 +452,13 @@ if run_btn:
             "distance": slot["distance"],
         })
     df = pd.DataFrame(rows)
-
+ 
     with st.spinner("Fetching map data..."):
         try:
             first        = df.iloc[0]
             raw_map      = post_request(SERVER, int(first["x"]), int(first["y"]), cookie)
             position_map, seen_coords = parse_all_animal_positions(raw_map)
-
+ 
             unknown_coords = [
                 (int(r["x"]), int(r["y"])) for _, r in df.iterrows()
                 if (int(r["x"]), int(r["y"])) not in seen_coords
@@ -363,11 +478,11 @@ if run_btn:
         except Exception as e:
             st.error(f"Map request failed: {e}")
             st.stop()
-
+ 
     df["has_animals"] = df.apply(lambda r: (r["x"], r["y"]) in position_map, axis=1)
     df["unknown"]     = df.apply(lambda r: (r["x"], r["y"]) not in seen_coords, axis=1)
     df["animals"]     = df.apply(lambda r: position_map.get((r["x"], r["y"]), [0] * 10), axis=1)
-
+ 
     # tribe-aware team calculation
     if tribe == "Gaul":
         def calc_team(row):
@@ -376,36 +491,41 @@ if run_btn:
             animals = adapt_unit_counts(row["animals"][:], row["distance"], speed)
             result  = gaul_get_best_team(animals, max_tt=max_teams, profit_factor=profit_factor)
             return result if result is not None else 0
+        df["n_teams"]  = df.apply(calc_team, axis=1)
+        df["n_clubs"]  = 0
+        df["n_tk"]     = 0
     else:
-        def calc_team(row):
+        def calc_team_teuton(row):
             if not row["has_animals"]:
-                return 0
+                return (0, 0)
             animals = adapt_unit_counts(row["animals"][:], row["distance"], speed)
-            result  = teuton_get_best_team(animals, max_teams=max_teams, profit_factor=profit_factor)
-            return result if result is not None else 0
-
-    df["n_teams"] = df.apply(calc_team, axis=1)
-
+            result  = teuton_get_best_team(animals, max_clubs=max_teams, max_tk=20, profit_factor=profit_factor)
+            return result if result is not None else (0, 0)
+        teuton_results = df.apply(calc_team_teuton, axis=1)
+        df["n_clubs"]  = teuton_results.apply(lambda t: t[0])
+        df["n_tk"]     = teuton_results.apply(lambda t: t[1])
+        df["n_teams"]  = df["n_clubs"]  # for clearable check (0 = unclearable)
+ 
     # troop cycling columns (based on tribe speed)
     troop_spd = TT_SPD if tribe == "Gaul" else CLUB_SPD
     df["troops_needed"] = df["distance"].apply(lambda d: troops_needed(d, troop_spd))
     # Gaul also tracks Hae separately; Teuton doesn't
     if tribe == "Gaul":
         df["hae_needed"] = df["distance"].apply(lambda d: troops_needed(d, 13))
-
+ 
     st.session_state["df"]         = df
     st.session_state["village_id"] = village_id
     st.session_state["tribe"]      = tribe
-
+ 
 # ── render results ────────────────────────────────────────────────────────────
 if "df" in st.session_state:
     df         = st.session_state["df"]
     village_id = st.session_state["village_id"]
     tribe      = st.session_state.get("tribe", "Gaul")
-
+ 
     active   = df[df["isActive"] == True]
     inactive = df[df["isActive"] == False].reset_index(drop=True)
-
+ 
     st.subheader("Active farm requirements")
     if tribe == "Gaul":
         total_tt_active  = int(active["troops_needed"].sum())
@@ -418,43 +538,43 @@ if "df" in st.session_state:
         a1, a2 = st.columns(2)
         a1.metric("Clubs needed (all active farms)", total_clubs)
         a2.metric("TK needed (all active farms)", total_clubs)
-
+ 
     st.markdown("---")
-
+ 
     if inactive.empty:
         st.info("All slots are currently active — nothing to send.")
     else:
         total     = len(inactive)
         n_animals = int(inactive["has_animals"].sum())
         n_empty   = total - n_animals
-
+ 
         clearable      = inactive[(inactive["has_animals"]) & (inactive["n_teams"] > 0)]
         total_to_clear = int(clearable["n_teams"].sum())
         n_clearable    = len(clearable)
-
+ 
         team_label = "TT" if tribe == "Gaul" else "Club+TK teams"
-
+ 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Inactive slots", total)
         m2.metric("🔴 With animals", n_animals)
         m3.metric("🟢 Empty oases", n_empty)
         m4.metric(f"⚔ {team_label} to clear all", total_to_clear,
                   help=f"{n_clearable} clearable oases")
-
+ 
         only_animals = st.checkbox("Show only oases with animals", value=False)
         if only_animals:
             inactive = inactive[inactive["has_animals"]].reset_index(drop=True)
-
+ 
         # build attack URL list for open-all button
         attack_urls = []
         for _, row in inactive.iterrows():
             if bool(row["has_animals"]) and int(row["n_teams"]) > 0:
-                x, y, n = int(row["x"]), int(row["y"]), int(row["n_teams"])
+                x, y = int(row["x"]), int(row["y"])
                 if tribe == "Gaul":
-                    attack_urls.append(gaul_build_url(x, y, village_id, n))
+                    attack_urls.append(gaul_build_url(x, y, village_id, int(row["n_teams"])))
                 else:
-                    attack_urls.append(teuton_build_url(x, y, village_id, n))
-
+                    attack_urls.append(teuton_build_url(x, y, village_id, int(row["n_clubs"]), int(row["n_tk"])))
+ 
         if attack_urls:
             urls_json = json.dumps(attack_urls)
             components.html(
@@ -467,7 +587,7 @@ if "df" in st.session_state:
                 </button>""",
                 height=55,
             )
-
+ 
         # table header — Teuton has no Hae column
         if tribe == "Gaul":
             st.markdown(
@@ -491,15 +611,15 @@ if "df" in st.session_state:
                 '</div>',
                 unsafe_allow_html=True,
             )
-
+ 
         for idx, row in inactive.iterrows():
             x, y    = int(row["x"]), int(row["y"])
-            n_teams = int(row["n_teams"])
+            n_teams = int(row["n_teams"])   # for Gaul TT count; Teuton uses n_clubs/n_tk
             dist    = round(row["distance"], 1)
             has_an  = bool(row["has_animals"])
             unknown = bool(row["unknown"])
             troops  = int(row["troops_needed"])
-
+ 
             if tribe == "Gaul":
                 troop_type = {1: "TT", 2: "TT/hae"}.get(int(row["troop_sum"]), str(int(row["troop_sum"])))
                 hae        = int(row["hae_needed"]) if int(row["troop_sum"]) == 2 else 0
@@ -510,10 +630,10 @@ if "df" in st.session_state:
             else:
                 col_btn, col_team, col_coord, col_dist, col_tt = st.columns([1.2, 1.1, 0.8, 0.6, 0.9])
                 col_tt.markdown(f'<div class="team">{troops}</div>', unsafe_allow_html=True)
-
+ 
             col_coord.markdown(f'<div class="coord">({x}, {y})</div>', unsafe_allow_html=True)
             col_dist.markdown(f'<div class="dist">{dist}</div>', unsafe_allow_html=True)
-
+ 
             if unknown:
                 col_team.markdown('<div class="team-unclearable">unknown</div>', unsafe_allow_html=True)
                 col_btn.markdown('<div class="btn-disabled">? Out of range</div>', unsafe_allow_html=True)
@@ -525,8 +645,10 @@ if "df" in st.session_state:
                     team_str = f"{n_teams} TT"
                     url = gaul_build_url(x, y, village_id, n_teams)
                 else:
-                    team_str = f"{n_teams}× Club+TK"
-                    url = teuton_build_url(x, y, village_id, n_teams)
+                    nclub = int(row["n_clubs"])
+                    ntk   = int(row["n_tk"])
+                    team_str = f"{nclub}C + {ntk}TK"
+                    url = teuton_build_url(x, y, village_id, nclub, ntk)
                 col_team.markdown(f'<div class="team">{team_str}</div>', unsafe_allow_html=True)
                 col_btn.markdown('<div class="btn-red">', unsafe_allow_html=True)
                 col_btn.link_button("⚔ Attack", url, use_container_width=True)
@@ -536,3 +658,4 @@ if "df" in st.session_state:
                 col_btn.markdown('<div class="btn-green">', unsafe_allow_html=True)
                 col_btn.link_button("🗺 Map", build_map_url(x, y), use_container_width=True)
                 col_btn.markdown('</div>', unsafe_allow_html=True)
+ 
