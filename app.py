@@ -198,23 +198,13 @@ def teuton_get_best_team(animals, max_clubs=500, max_tk=20, profit_factor=0.8):
     """
     Full 2-D search over (nclub, ntk).
     Validity: ≤1 animal left AND gain ≥ profit_factor × cost.
-    Among all valid combos picks the one with best (gain-cost)/team_cost,
-    then among ties picks cheapest team_cost.
-    Returns (nclub, ntk) or None.
+    Returns the valid combo with the lowest team deployment cost (clubs*250 + tk*1525).
     """
-    nclubs_range = np.arange(1, max_clubs + 1)
-    ntk_range    = np.arange(1, max_tk + 1)
-    X, Y = np.meshgrid(nclubs_range, ntk_range)  # X=clubs, Y=tk
-
-    best_ratio    = -np.inf
     best_teamcost = np.inf
     best          = None
 
-    for i in range(len(ntk_range)):
-        for j in range(len(nclubs_range)):
-            nclub = int(X[i, j])
-            ntk   = int(Y[i, j])
-
+    for ntk in range(0, max_tk + 1):
+        for nclub in range(1, max_clubs + 1):
             hp_lost   = teuton_hp_lost(animals, nclub, ntk)
             cost      = teuton_cost(hp_lost, nclub, ntk)
             gain      = get_res_gained(animals, hp_lost)
@@ -224,9 +214,7 @@ def teuton_get_best_team(animals, max_clubs=500, max_tk=20, profit_factor=0.8):
             if left > 1 or gain < profit_factor * cost:
                 continue
 
-            ratio = (gain - cost) / team_cost if team_cost > 0 else -np.inf
-            if ratio > best_ratio or (ratio == best_ratio and team_cost < best_teamcost):
-                best_ratio    = ratio
+            if team_cost < best_teamcost:
                 best_teamcost = team_cost
                 best          = (nclub, ntk)
 
@@ -234,11 +222,11 @@ def teuton_get_best_team(animals, max_clubs=500, max_tk=20, profit_factor=0.8):
 
 def teuton_build_url(x, y, village_id, nclub, ntk):
     node_id = get_nodeid(x, y)
-    # Teuton: t1 = Clubswinger, t5 = TK
+    tk_part = f"troop%5Bt6%5D={ntk}&" if ntk > 0 else ""
     return (
         f"https://{SERVER}/build.php?"
         f"newdid={village_id}&gid=16&"
-        f"tt=2&troop%5Bt1%5D={nclub}&troop%5Bt6%5D={ntk}&"
+        f"tt=2&troop%5Bt1%5D={nclub}&{tk_part}"
         f"targetMapId={node_id}&eventType=4&"
     )
 
