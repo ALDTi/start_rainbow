@@ -126,8 +126,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── constants ──────────────────────────────────────────────────────────────────
-SERVER     = "ts2.x1.europe.travian.com"
-SHEET_ID   = "1nSNknj19eb_Jm2nKgZo-6bnw9yd1y4MQa9yDXnYML1M"
+SERVER     = "ts12.x1.europe.travian.com"
+SHEET_ID   = "1-9hAUMfgoehZ_ILgsVDwu2ib1j4LlXd4RwwUhvrMO-Y"
 SHEET_NAME = "cookie"
 
 animal_values  = [160, 160, 160, 160, 320, 320, 480, 480, 480, 800]
