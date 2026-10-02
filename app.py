@@ -238,7 +238,7 @@ def teuton_build_url(x, y, village_id, nclub, ntk):
     return (
         f"https://{SERVER}/build.php?"
         f"newdid={village_id}&gid=16&"
-        f"tt=2&troop%5Bt1%5D={nclub}&troop%5Bt5%5D={ntk}&"
+        f"tt=2&troop%5Bt1%5D={nclub}&troop%5Bt6%5D={ntk}&"
         f"targetMapId={node_id}&eventType=4&"
     )
 
